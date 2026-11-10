@@ -397,7 +397,25 @@ where
         self.taffy.nodes[node_id.into()].unrounded_layout = *layout;
     }
 
+    /// vue-native patch (vendor/taffy, m26): gpui's `DefiniteLength::Calc`.
+    ///
+    /// Upstream answers 0 for every calc value, since a `TaffyTree` has no
+    /// calc representation of its own. gpui (vendor/zed, `calc_handle` in
+    /// crates/gpui/src/taffy.rs) packs the one shape it writes,
+    /// `calc(<fraction> * 100% + <length>)`, into the handle itself: the
+    /// length's `f32` bits in the high half, the fraction's in the low half with
+    /// the three tag bits cleared. Nothing else in this tree makes calc values.
     #[inline(always)]
+    #[cfg(target_pointer_width = "64")]
+    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+        let bits = val as usize as u64;
+        let length = f32::from_bits((bits >> 32) as u32);
+        let fraction = f32::from_bits(bits as u32 & !0b111);
+        fraction * basis + length
+    }
+
+    #[inline(always)]
+    #[cfg(not(target_pointer_width = "64"))]
     fn resolve_calc_value(&self, _val: *const (), _basis: f32) -> f32 {
         0.0
     }
@@ -1539,5 +1557,52 @@ mod tests {
             8,
             "clear() drops all nodes, so it must drop their contexts too"
         );
+    }
+}
+
+/// vue-native patch tests (vendor/taffy, m26): see `resolve_calc_value`.
+#[cfg(all(test, feature = "calc", target_pointer_width = "64"))]
+mod vn_calc_tests {
+    use crate::prelude::*;
+
+    /// The handle exactly as gpui's `calc_handle` packs it.
+    fn handle(fraction: f32, length: f32) -> *const () {
+        let bits = ((length.to_bits() as u64) << 32) | (fraction.to_bits() & !0b111) as u64;
+        bits as usize as *const ()
+    }
+
+    #[test]
+    fn a_packed_calc_resolves_against_the_parent() {
+        let mut t: TaffyTree<()> = TaffyTree::new();
+        t.disable_rounding();
+        // `width: calc(100% - 40px)` and `left: calc(38.89% + 13.33px)` in a
+        // 300px box: 260 wide, 0.3889 * 300 + 13.33 = 130 in.
+        let wide = t
+            .new_leaf(Style {
+                size: Size { width: Dimension::calc(handle(1.0, -40.0)), height: length(10.0) },
+                ..Default::default()
+            })
+            .unwrap();
+        let thumb = t
+            .new_leaf(Style {
+                position: Position::Absolute,
+                inset: Rect { left: LengthPercentageAuto::calc(handle(0.3889, 13.33)), right: auto(), top: zero(), bottom: auto() },
+                size: Size { width: length(10.0), height: length(10.0) },
+                ..Default::default()
+            })
+            .unwrap();
+        let root = t
+            .new_with_children(
+                Style {
+                    display: Display::Block,
+                    size: Size { width: length(300.0), height: length(100.0) },
+                    ..Default::default()
+                },
+                &[wide, thumb],
+            )
+            .unwrap();
+        t.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        assert!((t.layout(wide).unwrap().size.width - 260.0).abs() < 0.01);
+        assert!((t.layout(thumb).unwrap().location.x - 130.0).abs() < 0.01);
     }
 }
