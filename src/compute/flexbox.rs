@@ -1370,6 +1370,39 @@ fn item_known_dimension_definiteness(constants: &AlgoConstants, item: &FlexItem)
     Size { width: true, height: true }.with_main(dir, main_is_definite).with_cross(dir, cross_is_definite)
 }
 
+/// vue-native patch (vendor/taffy, m26): the container's min-content main size
+/// from what is already known of its items (CSS Flexbox §9.9.1): the largest
+/// item contribution when it wraps, the sum of a line's otherwise. An item
+/// contributes its automatic minimum size, at least its preferred size, at
+/// least its flex base size if it does not shrink, within its min/max sizes,
+/// plus its margins. An item whose `min-width` is set below its content (`0`,
+/// or `overflow` other than visible) contributes that rather than its
+/// min-content size, which is not measured here: such a container fits its
+/// space where Chromium's would overflow it by that content.
+fn min_content_main_size(lines: &[FlexLine<'_>], constants: &AlgoConstants) -> f32 {
+    let dir = constants.dir;
+    let contribution = |child: &FlexItem| {
+        let mut size = child.resolved_minimum_main_size.maybe_max(child.size.main(dir));
+        if child.flex_shrink == 0.0 {
+            size = f32_max(size, child.flex_basis);
+        }
+        let padding_border_sum = (child.padding + child.border).main_axis_sum(dir);
+        f32_max(size.maybe_min(child.max_size.main(dir)).maybe_max(child.min_size.main(dir)), padding_border_sum)
+            + child.margin.main_axis_sum(dir)
+    };
+    let gap = constants.gap.main(dir);
+    lines
+        .iter()
+        .map(|line| {
+            if constants.is_wrap {
+                line.items.iter().map(contribution).fold(0.0, f32_max)
+            } else {
+                line.items.iter().map(contribution).sum::<f32>() + sum_axis_gaps(gap, line.items.len())
+            }
+        })
+        .fold(0.0, f32_max)
+}
+
 /// Determine the container's main size (if not already known)
 fn determine_container_main_size(
     tree: &mut impl LayoutFlexboxContainer,
@@ -1436,10 +1469,33 @@ fn determine_container_main_size(
                     return f32_max(size, f32_min(max_content_size, main_axis_available_space));
                 }
 
-                if lines.len() > 1 {
-                    f32_max(size, main_axis_available_space)
+                // vue-native patch (vendor/taffy, m26): an auto WIDTH in a
+                // definite space is fit-content (CSS Sizing 3 §5.1),
+                // `min(max-content, max(min-content, available))`. Upstream
+                // stopped at the max-content part, so a row whose items' bases
+                // passed the space (a link with `overflow-wrap: anywhere` in a
+                // chat bubble, measured as one line) kept that width and
+                // overflowed its column instead of letting the items shrink.
+                // The available space is the content box's; `room` is the
+                // container's outer size it allows, which a multi-line
+                // container fills (upstream compared it with the outer size).
+                // Only for a row: an auto HEIGHT is the content's whatever the
+                // room (CSS 2 §10.6.3), so a column, as an absolutely placed
+                // popup around a scroller, keeps its items' height.
+                if !constants.is_row {
+                    if lines.len() > 1 {
+                        f32_max(size, main_axis_available_space)
+                    } else {
+                        size
+                    }
                 } else {
-                    size
+                    let room = main_axis_available_space + main_content_box_inset;
+                    let size = if lines.len() > 1 { f32_max(size, room) } else { size };
+                    if size > room {
+                        size.min(f32_max(room, min_content_main_size(lines, constants) + main_content_box_inset))
+                    } else {
+                        size
+                    }
                 }
             }
             AvailableSpace::MinContent if constants.is_wrap => {
@@ -3463,5 +3519,132 @@ mod balance {
                 );
             }
         }
+    }
+}
+
+/// vue-native patch tests (vendor/taffy, m26): an auto main size in a definite
+/// space is fit-content (`determine_container_main_size`).
+#[cfg(all(test, feature = "taffy_tree"))]
+mod vn_fit_content_tests {
+    use crate::prelude::*;
+    use crate::{LayoutInput, LayoutOutput, Overflow, Point};
+
+    /// Text whose min-content width is `.0` and max-content width `.1`.
+    type Text = (f32, f32);
+
+    fn measure(inputs: LayoutInput, _: NodeId, text: Option<&mut Text>, style: &Style) -> LayoutOutput {
+        crate::compute_leaf_layout(inputs, style, |_, _| 0.0, |known, available| {
+            let Some(&mut (min, max)) = text else { return Size::ZERO };
+            let width = known.width.unwrap_or(match available.width {
+                AvailableSpace::MinContent => min,
+                AvailableSpace::MaxContent => max,
+                AvailableSpace::Definite(w) => w.clamp(min, max),
+            });
+            Size { width, height: (max / width).ceil() * 20.0 }
+        })
+    }
+
+    /// A box `width` px wide that does not shrink, as an avatar.
+    fn fixed(width: f32) -> (Style, Option<Text>) {
+        let size = Size { width: length(width), height: length(20.0) };
+        (Style { size, flex_shrink: 0.0, ..Default::default() }, None)
+    }
+
+    fn text(min: f32, max: f32) -> (Style, Option<Text>) {
+        (Style::default(), Some((min, max)))
+    }
+
+    /// The widths of `row` and of its `items`, the row in a 200px column that
+    /// does not stretch it (a message row in Argon's `items-start` body).
+    fn widths(row: Style, items: &[(Style, Option<Text>)]) -> (f32, Vec<f32>) {
+        let mut t: TaffyTree<Text> = TaffyTree::new();
+        t.disable_rounding();
+        let items: Vec<NodeId> = items
+            .iter()
+            .map(|(style, text)| match text {
+                Some(text) => t.new_leaf_with_context(style.clone(), *text).unwrap(),
+                None => t.new_leaf(style.clone()).unwrap(),
+            })
+            .collect();
+        let row = t.new_with_children(Style { display: Display::Flex, ..row }, &items).unwrap();
+        let column = Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FLEX_START,
+            size: Size { width: length(200.0), height: auto() },
+            ..Default::default()
+        };
+        let column = t.new_with_children(column, &[row]).unwrap();
+        t.compute_layout_with_measure(column, Size::MAX_CONTENT, measure).unwrap();
+        let width = |node: NodeId| t.layout(node).unwrap().size.width;
+        (width(row), items.iter().map(|&item| width(item)).collect())
+    }
+
+    #[test]
+    fn a_row_wider_than_its_space_shrinks_to_it_and_no_further_than_its_min_content() {
+        // A long link that may break anywhere: one line of 1000px, 20px at
+        // its narrowest. Upstream left the row at 1000.
+        assert_eq!(widths(Style::default(), &[text(20.0, 1000.0)]), (200.0, vec![200.0]));
+        // A long word that may not break holds the row open at its width,
+        // past the column, as in a browser.
+        assert_eq!(widths(Style::default(), &[text(300.0, 1000.0)]), (300.0, vec![300.0]));
+        // Content that fits keeps its max-content width.
+        assert_eq!(widths(Style::default(), &[text(20.0, 100.0)]), (100.0, vec![100.0]));
+    }
+
+    #[test]
+    fn an_item_that_does_not_shrink_counts_whole_for_the_min_content() {
+        let gap = Style { gap: Size { width: length(8.0), height: zero() }, ..Default::default() };
+        // An avatar, a gap and the text: the text takes what is left.
+        assert_eq!(widths(gap.clone(), &[fixed(36.0), text(20.0, 1000.0)]), (200.0, vec![36.0, 156.0]));
+        // An avatar wider than the column: the row's min-content is the
+        // avatar, the gap and the text's narrowest.
+        assert_eq!(widths(gap, &[fixed(250.0), text(20.0, 1000.0)]), (278.0, vec![250.0, 20.0]));
+    }
+
+    #[test]
+    fn a_wrapping_row_fills_its_space_padding_included() {
+        let wrap = Style {
+            flex_wrap: FlexWrap::Wrap,
+            padding: Rect { left: length(10.0), right: length(10.0), top: zero(), bottom: zero() },
+            ..Default::default()
+        };
+        // Three 80px boxes in 180px of content box: two lines. The row is the
+        // column's 200px; upstream compared its 180px content box with its
+        // outer size and made it 180.
+        let (row, _) = widths(wrap.clone(), &[fixed(80.0), fixed(80.0), fixed(80.0)]);
+        assert_eq!(row, 200.0);
+        // One item longer than the line: the row still fits the column.
+        assert_eq!(widths(wrap, &[text(20.0, 1000.0)]), (200.0, vec![180.0]));
+    }
+
+    #[test]
+    fn a_column_keeps_its_content_height_in_a_short_space() {
+        // A `<select>` popup: an absolutely placed column around a scroller,
+        // in a 30px-tall containing block. An auto height is not fit-content:
+        // the scroller's automatic minimum is 0, and a clamp to the room cut
+        // the popup to 30px.
+        let mut t: TaffyTree<Text> = TaffyTree::new();
+        t.disable_rounding();
+        let options =
+            t.new_leaf(Style { size: Size { width: length(100.0), height: length(300.0) }, ..Default::default() }).unwrap();
+        let scroller = Style {
+            flex_direction: FlexDirection::Column,
+            overflow: Point { x: Overflow::Visible, y: Overflow::Scroll },
+            ..Default::default()
+        };
+        let scroller = t.new_with_children(scroller, &[options]).unwrap();
+        let popup = Style {
+            display: Display::Flex,
+            flex_direction: FlexDirection::Column,
+            position: Position::Absolute,
+            ..Default::default()
+        };
+        let popup = t.new_with_children(popup, &[scroller]).unwrap();
+        let block = Style { size: Size { width: length(200.0), height: length(30.0) }, ..Default::default() };
+        let block = t.new_with_children(block, &[popup]).unwrap();
+        t.compute_layout_with_measure(block, Size::MAX_CONTENT, measure).unwrap();
+        assert_eq!(t.layout(popup).unwrap().size.height, 300.0);
+        assert_eq!(t.layout(scroller).unwrap().size.height, 300.0);
     }
 }
