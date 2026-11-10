@@ -588,3 +588,82 @@ mod vn_aspect_transfer_tests {
         assert_eq!(picture(Display::Block, false, wide), (100.0, 100.0 / RATIO));
     }
 }
+
+/// vue-native regression tests (vendor/taffy, m26): a percentage `flex-basis`
+/// the container cannot resolve is `content` (`determine_flex_base_size`).
+/// This was a vue-native patch on 0.13; upstream 0.15 does the same.
+#[cfg(all(test, feature = "taffy_tree", feature = "block_layout", feature = "flexbox"))]
+mod vn_percent_basis_tests {
+    use crate::prelude::*;
+
+    /// The item's main size: `flex: 1 1 <basis>` with `<main>` as its own
+    /// height (width for a row), holding content `content` px long, in a
+    /// container whose main size is `container` (None: auto).
+    fn item(column: bool, container: Option<f32>, basis: Dimension, main: Dimension, content: f32) -> f32 {
+        let mut t: TaffyTree<()> = TaffyTree::new();
+        let along = |m: Dimension, other: Dimension| if column { Size { width: other, height: m } } else { Size { width: m, height: other } };
+        let inner = t.new_leaf(Style { size: along(length(content), length(10.0)), ..Default::default() }).unwrap();
+        let it = t
+            .new_with_children(
+                Style {
+                    display: Display::Flex,
+                    flex_direction: if column { FlexDirection::Column } else { FlexDirection::Row },
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    flex_basis: basis,
+                    size: along(main, auto()),
+                    ..Default::default()
+                },
+                &[inner],
+            )
+            .unwrap();
+        let fixed = |v: Option<f32>| v.map_or(auto(), length);
+        let c = t
+            .new_with_children(
+                Style {
+                    display: Display::Flex,
+                    flex_direction: if column { FlexDirection::Column } else { FlexDirection::Row },
+                    size: along(fixed(container), auto()),
+                    ..Default::default()
+                },
+                &[it],
+            )
+            .unwrap();
+        t.compute_layout(c, Size::MAX_CONTENT).unwrap();
+        let s = t.layout(it).unwrap().size;
+        if column {
+            s.height
+        } else {
+            s.width
+        }
+    }
+
+    #[test]
+    fn a_definite_container_resolves_the_percentage_and_the_size_caps_the_minimum() {
+        // Argon's settings drawer: `flex-1` (`flex: 1 1 0%`) and `height:
+        // 100%` in a 700px column, over 3000px of settings. The automatic
+        // minimum is the smaller of the content and the specified size, so the
+        // row is held to the column and its scroller scrolls.
+        for column in [true, false] {
+            assert_eq!(item(column, Some(700.0), percent(0.0), percent(1.0), 3000.0), 700.0, "column {column}");
+            assert_eq!(item(column, Some(700.0), percent(0.0), length(600.0), 3000.0), 700.0, "column {column}");
+            // The same with a length basis, which was always right.
+            assert_eq!(item(column, Some(700.0), length(0.0), percent(1.0), 3000.0), 700.0, "column {column}");
+            // No specified size: the minimum is the content, in a browser too.
+            assert_eq!(item(column, Some(700.0), percent(0.0), auto(), 3000.0), 3000.0, "column {column}");
+        }
+    }
+
+    #[test]
+    fn an_indefinite_container_makes_the_percentage_content_not_the_size() {
+        // reka's Select viewport: `flex: 1` and `height: 40px` (the trigger's)
+        // in an auto-height column, around 103px of items. Edge: 103.
+        assert_eq!(item(true, None, percent(0.0), length(40.0), 103.0), 103.0);
+        // An `auto` basis still reads the size.
+        assert_eq!(item(true, None, auto(), length(40.0), 103.0), 40.0);
+        // Not asserted for a row: an auto width is the container's intrinsic
+        // size first, from the item's max-content contribution (its 40px
+        // `width`), and the percentage then resolves against it (taffy 0.15
+        // answers 40, as Chromium does).
+    }
+}
