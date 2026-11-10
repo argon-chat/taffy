@@ -342,15 +342,12 @@ impl GridItem {
         let padding_border_size = (padding + border).sum_axes();
         let box_sizing_adjustment =
             if self.box_sizing == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
-        let inherent_size = self
-            .size
-            .maybe_resolve(grid_area_size, |val, basis| tree.calc(val, basis))
-            .maybe_apply_aspect_ratio(aspect_ratio)
-            .maybe_add(box_sizing_adjustment);
+        let preferred = self.size.maybe_resolve(grid_area_size, |val, basis| tree.calc(val, basis));
+        let inherent_size = preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment);
         let min_size = self
             .min_size
             .maybe_resolve(grid_area_size, |val, basis| tree.calc(val, basis))
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
             .maybe_add(box_sizing_adjustment)
             // The size of the item is floored by its padding and border
             .or(padding_border_size.map(Some))
@@ -358,7 +355,7 @@ impl GridItem {
         let max_size = self
             .max_size
             .maybe_resolve(grid_area_size, |val, basis| tree.calc(val, basis))
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
             .maybe_add(box_sizing_adjustment);
 
         let grid_area_minus_item_margins_size = grid_area_size.maybe_sub(margins).maybe_max(Size::ZERO);

@@ -33,6 +33,10 @@ struct FlexItem {
 
     /// The base size of this item
     size: Size<Option<f32>>,
+    /// The item's preferred size as resolved, BEFORE `aspect_ratio` filled an
+    /// auto axis in: what decides whether min/max transfer through the ratio
+    /// (`Size::maybe_transfer_aspect_ratio`, a vue-native patch).
+    preferred: Size<Option<f32>>,
     /// The raw size style of this item. Used to detect and resolve sizing
     /// keywords (`min-content`, `max-content`, `fit-content`, `fit-content(...)`, and `stretch`)
     size_style: Size<Dimension>,
@@ -248,15 +252,16 @@ pub fn compute_flexbox_layout(
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_sum } else { Size::ZERO };
 
+    let preferred = style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis));
     let min_size = style
         .min_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let max_size = style
         .max_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let clamped_style_size = if inputs.sizing_mode == SizingMode::InherentSize {
         style
@@ -649,6 +654,7 @@ fn compute_constants(
 
     let container_size = Size::zero();
     let inner_container_size = Size::zero();
+    let preferred = style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis));
 
     AlgoConstants {
         dir,
@@ -664,12 +670,12 @@ fn compute_constants(
         min_size: style
             .min_size()
             .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
             .maybe_add(box_sizing_adjustment),
         max_size: style
             .max_size()
             .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-            .maybe_apply_aspect_ratio(aspect_ratio)
+            .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
             .maybe_add(box_sizing_adjustment),
         border,
         gap,
@@ -749,14 +755,13 @@ fn generate_anonymous_flex_items(
             let pb_sum = (padding + border).sum_axes();
             let box_sizing_adjustment =
                 if child_style.box_sizing() == BoxSizing::ContentBox { pb_sum } else { Size::ZERO };
+            let preferred =
+                child_style.size().maybe_resolve(percent_resolution_size, |val, basis| tree.calc(val, basis));
             FlexItem {
                 node: child,
                 order: index as u32,
-                size: child_style
-                    .size()
-                    .maybe_resolve(percent_resolution_size, |val, basis| tree.calc(val, basis))
-                    .maybe_apply_aspect_ratio(aspect_ratio)
-                    .maybe_add(box_sizing_adjustment),
+                size: preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment),
+                preferred,
                 size_style: child_style.size(),
                 min_size: child_style
                     .min_size()
@@ -900,8 +905,8 @@ fn determine_flex_base_size(
         // Available space for child sizing (excluding the child's margins)
         // Min/max sizes transferred through the aspect ratio are taken into account here
         // https://github.com/w3c/csswg-drafts/issues/10997
-        let transferred_min_size = child.min_size.maybe_apply_aspect_ratio(child.aspect_ratio);
-        let transferred_max_size = child.max_size.maybe_apply_aspect_ratio(child.aspect_ratio);
+        let transferred_min_size = child.min_size.maybe_transfer_aspect_ratio(child.aspect_ratio, child.preferred);
+        let transferred_max_size = child.max_size.maybe_transfer_aspect_ratio(child.aspect_ratio, child.preferred);
         let child_min_cross = transferred_min_size.cross(dir);
         let child_max_cross = transferred_max_size.cross(dir);
 
@@ -1552,9 +1557,9 @@ fn determine_container_main_size(
                                     // `determine_flex_base_size` does: an item measured wider than its
                                     // max-width wraps onto fewer lines and under-reports its height.
                                     let transferred_min_size =
-                                        item.min_size.maybe_apply_aspect_ratio(item.aspect_ratio);
+                                        item.min_size.maybe_transfer_aspect_ratio(item.aspect_ratio, item.preferred);
                                     let transferred_max_size =
-                                        item.max_size.maybe_apply_aspect_ratio(item.aspect_ratio);
+                                        item.max_size.maybe_transfer_aspect_ratio(item.aspect_ratio, item.preferred);
                                     ckd.set_cross(
                                         dir,
                                         ckd.cross(dir).maybe_clamp(
@@ -1904,8 +1909,10 @@ fn determine_hypothetical_cross_size(
 
         // Sizes transferred through the aspect ratio clamp the hypothetical cross size
         // https://github.com/w3c/csswg-drafts/issues/10997
-        let transferred_min_cross = child.min_size.maybe_apply_aspect_ratio(child.aspect_ratio).cross(constants.dir);
-        let transferred_max_cross = child.max_size.maybe_apply_aspect_ratio(child.aspect_ratio).cross(constants.dir);
+        let transferred_min_cross =
+            child.min_size.maybe_transfer_aspect_ratio(child.aspect_ratio, child.preferred).cross(constants.dir);
+        let transferred_max_cross =
+            child.max_size.maybe_transfer_aspect_ratio(child.aspect_ratio, child.preferred).cross(constants.dir);
 
         let child_cross = child
             .size

@@ -398,15 +398,16 @@ pub fn compute_block_layout(
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
 
+    let preferred = style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis));
     let min_size = style
         .min_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let max_size = style
         .max_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let clamped_style_size = if inputs.sizing_mode == SizingMode::InherentSize {
         style
@@ -517,20 +518,17 @@ fn compute_inner(
 
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
-    let size = style
-        .size()
-        .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
+    let preferred = style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis));
+    let size = preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment);
     let min_size = style
         .min_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let max_size = style
         .max_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
 
     // css-sizing-4: a definite size in one axis transfers through `aspect-ratio`
@@ -917,6 +915,8 @@ fn generate_item_list(
                 && !contain.establishes_independent_formatting_context()
                 && child_style.align_content().keyword == AlignContentKeyword::Normal;
 
+            let preferred = child_style.size().maybe_resolve(node_inner_size, |val, basis| tree.calc(val, basis));
+
             BlockItem {
                 node_id: child_node_id,
                 order: order as u32,
@@ -928,20 +928,16 @@ fn generate_item_list(
                 #[cfg(feature = "float_layout")]
                 clear: child_style.clear(),
                 size_style: child_style.size(),
-                size: child_style
-                    .size()
-                    .maybe_resolve(node_inner_size, |val, basis| tree.calc(val, basis))
-                    .maybe_apply_aspect_ratio(aspect_ratio)
-                    .maybe_add(box_sizing_adjustment),
+                size: preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment),
                 min_size: child_style
                     .min_size()
                     .maybe_resolve(node_inner_size, |val, basis| tree.calc(val, basis))
-                    .maybe_apply_aspect_ratio(aspect_ratio)
+                    .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
                     .maybe_add(box_sizing_adjustment),
                 max_size: child_style
                     .max_size()
                     .maybe_resolve(node_inner_size, |val, basis| tree.calc(val, basis))
-                    .maybe_apply_aspect_ratio(aspect_ratio)
+                    .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
                     .maybe_add(box_sizing_adjustment),
                 overflow,
                 contain,

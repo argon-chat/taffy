@@ -111,15 +111,16 @@ fn compute_container_constants<Tree: LayoutGridContainer>(
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
 
+    let preferred = style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis));
     let min_size = style
         .min_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let max_size = style
         .max_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let preferred_size = if inputs.sizing_mode == SizingMode::InherentSize {
         style

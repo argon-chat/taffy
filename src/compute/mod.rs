@@ -514,3 +514,77 @@ mod tests {
         }
     }
 }
+
+/// vue-native patch tests (vendor/taffy, m26): `Size::maybe_transfer_aspect_ratio`.
+/// A picture (a 16:9 leaf) in a 100x120 box, under Tailwind's preflight
+/// `max-width: 100%`.
+#[cfg(all(test, feature = "taffy_tree", feature = "block_layout", feature = "flexbox", feature = "grid"))]
+mod vn_aspect_transfer_tests {
+    use crate::prelude::*;
+
+    const RATIO: f32 = 16.0 / 9.0;
+
+    /// The picture's laid-out size, as `(width, height)`.
+    fn picture(parent: Display, absolute: bool, size: Size<Dimension>) -> (f32, f32) {
+        let mut t: TaffyTree<()> = TaffyTree::new();
+        t.disable_rounding();
+        let pic = t
+            .new_leaf(Style {
+                position: if absolute { Position::Absolute } else { Position::Relative },
+                inset: if absolute {
+                    Rect { left: length(0.0), right: length(0.0), top: length(0.0), bottom: length(0.0) }
+                } else {
+                    Rect::auto()
+                },
+                size,
+                max_size: Size { width: percent(1.0), height: auto() },
+                aspect_ratio: Some(RATIO),
+                ..Default::default()
+            })
+            .unwrap();
+        let cell = t
+            .new_with_children(
+                Style {
+                    display: parent,
+                    size: Size { width: length(100.0), height: length(120.0) },
+                    ..Default::default()
+                },
+                &[pic],
+            )
+            .unwrap();
+        t.compute_layout(cell, Size::MAX_CONTENT).unwrap();
+        let l = t.layout(pic).unwrap();
+        (l.size.width, l.size.height)
+    }
+
+    fn full() -> Size<Dimension> {
+        Size { width: percent(1.0), height: percent(1.0) }
+    }
+
+    #[test]
+    fn a_definite_height_is_not_capped_by_max_width_over_the_ratio() {
+        // VideoAttachment's poster: absolute, inset 0, 100% x 100%.
+        for parent in [Display::Block, Display::Flex, Display::Grid] {
+            assert_eq!(picture(parent, true, full()), (100.0, 120.0), "absolute in {parent:?}");
+        }
+        // `w-full h-full object-cover`, in flow. (Not in an `auto` grid track:
+        // a percentage size there is cyclic, which is track sizing's question,
+        // not this one.)
+        for parent in [Display::Block, Display::Flex] {
+            assert_eq!(picture(parent, false, full()), (100.0, 120.0), "in flow in {parent:?}");
+        }
+    }
+
+    #[test]
+    fn an_auto_height_still_follows_the_ratio_and_its_transferred_max() {
+        // `width: 100%; height: auto`: the ratio decides the height.
+        let auto_h = Size { width: percent(1.0), height: auto() };
+        assert_eq!(picture(Display::Block, true, auto_h), (100.0, 100.0 / RATIO));
+        assert_eq!(picture(Display::Block, false, auto_h), (100.0, 100.0 / RATIO));
+        // `width: 500px; max-width: 100%; height: auto`: the width is capped at
+        // 100 and the height follows it, through the transferred max-height.
+        let wide = Size { width: length(500.0), height: auto() };
+        assert_eq!(picture(Display::Block, true, wide), (100.0, 100.0 / RATIO));
+        assert_eq!(picture(Display::Block, false, wide), (100.0, 100.0 / RATIO));
+    }
+}

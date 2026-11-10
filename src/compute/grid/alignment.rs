@@ -147,21 +147,19 @@ pub(super) fn align_and_position_item(
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
 
     let size_style = style.size();
-    let inherent_size = size_style
-        .maybe_resolve(containing_block_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
+    let preferred = size_style.maybe_resolve(containing_block_size, |val, basis| tree.calc(val, basis));
+    let inherent_size = preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment);
     let min_size = style
         .min_size()
         .maybe_resolve(containing_block_size, |val, basis| tree.calc(val, basis))
         .maybe_add(box_sizing_adjustment)
         .or(padding_border_size.map(Some))
         .maybe_max(padding_border_size)
-        .maybe_apply_aspect_ratio(aspect_ratio);
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred);
     let max_size = style
         .max_size()
         .maybe_resolve(containing_block_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
 
     // Resolve `normal` alignment (the default if alignment is set on neither the parent or the node itself)

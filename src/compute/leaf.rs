@@ -47,15 +47,12 @@ where
         }
         SizingMode::InherentSize => {
             let aspect_ratio = style.aspect_ratio();
-            let style_size = style
-                .size()
-                .maybe_resolve(parent_size, &resolve_calc_value)
-                .maybe_apply_aspect_ratio(aspect_ratio)
-                .maybe_add(box_sizing_adjustment);
+            let preferred = style.size().maybe_resolve(parent_size, &resolve_calc_value);
+            let style_size = preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment);
             let style_min_size = style
                 .min_size()
                 .maybe_resolve(parent_size, &resolve_calc_value)
-                .maybe_apply_aspect_ratio(aspect_ratio)
+                .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
                 .maybe_add(box_sizing_adjustment);
             let style_max_size =
                 style.max_size().maybe_resolve(parent_size, &resolve_calc_value).maybe_add(box_sizing_adjustment);

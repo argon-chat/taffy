@@ -630,6 +630,29 @@ impl Size<Option<f32>> {
             None => self,
         }
     }
+
+    /// Transfers a min or max size (`self`) through `aspect_ratio` into the
+    /// axis that does not set one, but only where the PREFERRED size
+    /// (`preferred`, resolved, before the ratio filled anything in) is auto.
+    ///
+    /// css-sizing-4 §5.2: the ratio transfers a box's min/max constraints only
+    /// while determining an automatic size in the other axis. A definite
+    /// `height` is therefore not capped by `max-width / ratio`: an `<img>` at
+    /// `width: 100%; height: 100%` under Tailwind's preflight
+    /// (`max-width: 100%`) fills its box in a browser, where plain
+    /// [`Self::maybe_apply_aspect_ratio`] gave it a max-height of `width /
+    /// ratio` and left it at its picture's own shape. (vue-native patch.)
+    pub fn maybe_transfer_aspect_ratio(
+        self,
+        aspect_ratio: Option<f32>,
+        preferred: Size<Option<f32>>,
+    ) -> Size<Option<f32>> {
+        let transferred = self.maybe_apply_aspect_ratio(aspect_ratio);
+        Size {
+            width: if preferred.width.is_some() { self.width } else { transferred.width },
+            height: if preferred.height.is_some() { self.height } else { transferred.height },
+        }
+    }
 }
 
 impl<T> Size<Option<T>> {

@@ -499,21 +499,19 @@ pub(crate) fn layout_oof_box<Tree: LayoutContainingBlock>(
 
     // Compute known dimensions from min/max/inherent size styles
     let size_style = child_style.size();
-    let style_size = size_style
-        .maybe_resolve(area_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
-        .maybe_add(box_sizing_adjustment);
+    let preferred = size_style.maybe_resolve(area_size, |val, basis| tree.calc(val, basis));
+    let style_size = preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment);
     let mut min_size = child_style
         .min_size()
         .maybe_resolve(area_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment)
         .or(padding_border_sum.map(Some))
         .maybe_max(padding_border_sum);
     let max_size = child_style
         .max_size()
         .maybe_resolve(area_size, |val, basis| tree.calc(val, basis))
-        .maybe_apply_aspect_ratio(aspect_ratio)
+        .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
     let mut known_dimensions = style_size.maybe_clamp(min_size, max_size);
 
