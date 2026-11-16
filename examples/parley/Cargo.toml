@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-taffy = { path = "../.." }
+taffy = { path = "../..", package = "skathi-taffy" }
 parley = "0.11.1"

@@ -1,5 +1,5 @@
 [package]
-name = "taffy"
+name = "skathi-taffy"
 version = "0.15.0"
 authors = [
     "Alice Cecile <alice.i.cecile@gmail.com>",
@@ -8,12 +8,17 @@ authors = [
 ]
 edition = "2021"
 rust-version = "1.71"
-include = ["src/**/*", "examples/**/*", "Cargo.toml", "README.md"]
-description = "A flexible UI layout library "
-repository = "https://github.com/DioxusLabs/taffy"
+include = ["src/**/*", "examples/**/*", "Cargo.toml", "README.md", "LICENSE"]
+description = "Taffy, a flexible UI layout library, with the layout fixes Skathi depends on"
+repository = "https://github.com/argon-chat/taffy"
+homepage = "https://skathi.land"
+readme = "README.md"
 keywords = ["cross-platform", "layout", "flexbox", "css-grid", "grid"]
 categories = ["gui"]
 license = "MIT"
+
+[lib]
+name = "taffy"
 
 [dependencies]
 document-features = { version = "0.2.7", optional = true }
@@ -95,7 +100,7 @@ roxmltree = "0.21.1"
 taffy_test_helpers = { path = "tests/common"}
 
 # Enable default features for tests and examples
-taffy = { path = ".", features = ["parse"] }
+taffy = { path = ".", package = "skathi-taffy", features = ["parse"] }
 
 [profile.release]
 lto = true
