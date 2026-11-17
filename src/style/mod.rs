@@ -530,9 +530,11 @@ crate::util::parse::impl_parse_for_keyword_enum!(Overflow,
 ///     containment's other effects (clipping, containing absolutely-positioned descendants,
 ///     stacking context) are outside of Taffy's scope.
 ///
+///   - [`Contain::INLINE_SIZE`] and [`Contain::BLOCK_SIZE`]: the box is sized as if it were empty
+///     on that axis (size containment), unless its own style or its parent fixes the size.
+///
 /// The `style` containment type has no effect on layout and is therefore not represented
-/// (it is accepted and ignored when parsing). Size and inline-size containment are not
-/// currently implemented.
+/// (it is accepted and ignored when parsing).
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/CSS/contain>
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
@@ -552,6 +554,13 @@ impl Contain {
     pub const PAINT: Contain = Contain(1 << 1);
     /// The containment implied by `contain: content` (`layout paint`, ignoring style containment)
     pub const CONTENT: Contain = Contain(Contain::LAYOUT.0 | Contain::PAINT.0);
+    /// Inline-size containment: the box's inline size is computed as if it had no content.
+    /// <https://drafts.csswg.org/css-contain-3/#containment-inline-size>
+    pub const INLINE_SIZE: Contain = Contain(1 << 2);
+    /// Size containment on the block axis; with [`Contain::INLINE_SIZE`] this is `contain: size`.
+    pub const BLOCK_SIZE: Contain = Contain(1 << 3);
+    /// `contain: size`
+    pub const SIZE: Contain = Contain(Contain::INLINE_SIZE.0 | Contain::BLOCK_SIZE.0);
 
     /// The default containment (no containment)
     pub const DEFAULT: Contain = Contain::NONE;
@@ -639,6 +648,8 @@ impl crate::util::parse::FromCss for Contain {
                 },
                 "layout" => (Contain::LAYOUT, Contain::LAYOUT.0),
                 "paint" => (Contain::PAINT, Contain::PAINT.0),
+                "size" => (Contain::SIZE, Contain::SIZE.0),
+                "inline-size" => (Contain::INLINE_SIZE, Contain::SIZE.0),
                 // `style` containment has no layout effect: accept and ignore it so that real
                 // CSS values round-trip
                 "style" => (Contain::NONE, STYLE_BIT),

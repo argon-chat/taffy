@@ -17,6 +17,7 @@ use crate::tree::{
 use crate::util::debug::{debug_log, debug_log_node};
 use crate::util::sys::{new_const_children_vec, new_vec_with_capacity, Box, ChildrenVec, Vec};
 
+use crate::compute::common::containment::size_contained;
 use crate::compute::{
     compute_cached_layout, compute_hidden_layout, compute_leaf_layout, compute_oof_layout, compute_root_layout,
     round_layout,
@@ -305,6 +306,7 @@ where
         compute_cached_layout(self, node_id, inputs, |tree, node_id, inputs| {
             let display_mode = tree.taffy.nodes[node_id.into()].style.display;
             let has_children = tree.child_count(node_id) > 0;
+            let inputs = size_contained(&*tree, &tree.taffy.nodes[node_id.into()].style, inputs);
 
             debug_log!(display_mode);
             debug_log_node!(inputs);
