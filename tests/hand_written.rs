@@ -1,6 +1,7 @@
 mod hand_written {
     mod absolute_replaced;
     mod adversarial_styles;
+    mod aspect_ratio_min_content;
     mod baseline;
     mod block_margin;
     mod block_replaced;

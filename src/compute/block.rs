@@ -37,6 +37,21 @@ pub fn compute_block_align_content_offset(align_content: AlignContent, free_spac
     compute_alignment_offset(free_space, 1, 0.0, keyword, false, true)
 }
 
+/// css-sizing-4 §5.1: under `min-height: auto`, a box that is not a scroll container and takes its
+/// height from `aspect-ratio` still grows to fit its content, so that height is only a minimum.
+fn ratio_height_is_minimum(
+    aspect_ratio: Option<f32>,
+    size: Size<Dimension>,
+    min_size: Size<LengthPercentageAuto>,
+    overflow: Point<Overflow>,
+) -> bool {
+    aspect_ratio.is_some()
+        && size.height.is_auto()
+        && min_size.height.is_auto()
+        && !overflow.x.is_scroll_container()
+        && !overflow.y.is_scroll_container()
+}
+
 /// Context for positioning Block and Float boxes within a Block Formatting Context
 pub struct BlockFormattingContext {
     /// The float positioning context that handles positioning floats within this Block Formatting Context
@@ -409,11 +424,10 @@ pub fn compute_block_layout(
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
         .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
+    let ratio_min = ratio_height_is_minimum(aspect_ratio, style.size(), style.min_size(), overflow);
     let clamped_style_size = if inputs.sizing_mode == SizingMode::InherentSize {
-        style
-            .size()
-            .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
-            .maybe_apply_aspect_ratio(aspect_ratio)
+        let derived = preferred.maybe_apply_aspect_ratio(aspect_ratio);
+        Size { width: derived.width, height: if ratio_min { preferred.height } else { derived.height } }
             .maybe_add(box_sizing_adjustment)
             .maybe_clamp(min_size, max_size)
     } else {
@@ -520,7 +534,7 @@ fn compute_inner(
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
     let preferred = style.size().maybe_resolve(parent_size, |val, basis| tree.calc(val, basis));
     let size = preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment);
-    let min_size = style
+    let mut min_size = style
         .min_size()
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
         .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
@@ -530,6 +544,7 @@ fn compute_inner(
         .maybe_resolve(parent_size, |val, basis| tree.calc(val, basis))
         .maybe_transfer_aspect_ratio(aspect_ratio, preferred)
         .maybe_add(box_sizing_adjustment);
+    let ratio_min = ratio_height_is_minimum(aspect_ratio, style.size(), style.min_size(), style.overflow());
 
     // css-sizing-4: a definite size in one axis transfers through `aspect-ratio`
     // to make the other definite. Deriving it from `known_dimensions` self-gates
@@ -538,13 +553,24 @@ fn compute_inner(
     // while probing intrinsic sizes, so measure passes stay content-based. Only a
     // newly-filled axis is adopted (and clamped); an incoming known size is left
     // as the parent resolved it (re-clamping would undo padding/border overrides).
+    let mut ratio_height = None;
     let known_dimensions = {
         let derived = known_dimensions.maybe_apply_aspect_ratio(aspect_ratio).maybe_clamp(min_size, max_size);
-        Size { width: known_dimensions.width.or(derived.width), height: known_dimensions.height.or(derived.height) }
+        let height = if ratio_min && known_dimensions.height.is_none() {
+            min_size.height = match (min_size.height, derived.height) {
+                (Some(min), Some(ratio)) => Some(min.max(ratio)),
+                (min, ratio) => min.or(ratio),
+            };
+            ratio_height = derived.height;
+            None
+        } else {
+            known_dimensions.height.or(derived.height)
+        };
+        Size { width: known_dimensions.width.or(derived.width), height }
     };
     let percentage_basis_dimensions = Size {
         width: known_dimensions.width,
-        height: known_dimensions.height.filter(|_| inputs.known_dimensions_are_definite.height),
+        height: known_dimensions.height.or(ratio_height).filter(|_| inputs.known_dimensions_are_definite.height),
     };
     let container_content_box_size = percentage_basis_dimensions.maybe_sub(content_box_inset.sum_axes());
 
@@ -916,6 +942,10 @@ fn generate_item_list(
                 && child_style.align_content().keyword == AlignContentKeyword::Normal;
 
             let preferred = child_style.size().maybe_resolve(node_inner_size, |val, basis| tree.calc(val, basis));
+            let derived = preferred.maybe_apply_aspect_ratio(aspect_ratio);
+            let ratio_min =
+                is_block && ratio_height_is_minimum(aspect_ratio, child_style.size(), child_style.min_size(), overflow);
+            let size = Size { width: derived.width, height: if ratio_min { preferred.height } else { derived.height } };
 
             BlockItem {
                 node_id: child_node_id,
@@ -928,7 +958,7 @@ fn generate_item_list(
                 #[cfg(feature = "float_layout")]
                 clear: child_style.clear(),
                 size_style: child_style.size(),
-                size: preferred.maybe_apply_aspect_ratio(aspect_ratio).maybe_add(box_sizing_adjustment),
+                size: size.maybe_add(box_sizing_adjustment),
                 min_size: child_style
                     .min_size()
                     .maybe_resolve(node_inner_size, |val, basis| tree.calc(val, basis))
